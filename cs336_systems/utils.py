@@ -28,8 +28,8 @@ class TextDataset:
         return np.array(ids)
 
 
-def loading_data(ids, context_length):
-    x, y = data.get_batch(dataset=ids, batch_size=4, context_length=context_length, device="cuda")
+def loading_data(ids, context_length, device):
+    x, y = data.get_batch(dataset=ids, batch_size=4, context_length=context_length, device=device)
     return x, y
 
 
