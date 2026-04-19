@@ -86,9 +86,9 @@ def main(
             input_file=input_file,
             tokenizer=tokenizer,
         )
-        serialize_dataset(serde_output_dir, dataset, f"{config["name"]}_{vocab_size}_dataset.pkl")
+        serialize_dataset(serde_output_dir, dataset, f"{config['name']}_{vocab_size}_dataset.pkl")
     else:
-        dataset = deserialize_dataset(serde_output_dir, f"{config["name"]}_{vocab_size}_dataset.pkl")
+        dataset = deserialize_dataset(serde_output_dir, f"{config['name']}_{vocab_size}_dataset.pkl")
 
     m = model.BasicsTransformerLM(
         vocab_size=vocab_size,
