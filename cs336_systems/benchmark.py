@@ -24,6 +24,23 @@ def get_time(is_local):
     return t0
 
 
+def serialize_dataset(serde_output_dir, obj, file):
+    import pickle
+
+    # Ensure the output directory exists
+    Path(serde_output_dir).mkdir(parents=True, exist_ok=True)
+
+    with open(os.path.join(serde_output_dir, file), "wb") as f:
+        pickle.dump(obj, f)
+
+
+def deserialize_dataset(serde_output_dir, file):
+    import pickle
+
+    with open(os.path.join(serde_output_dir, file), "rb") as f:
+        return pickle.load(f)
+
+
 def main(
     vocab_size: int,
     context_length: int,
@@ -37,12 +54,14 @@ def main(
     config = local_benchmark_config
     # Ensure encoding output directory exists
     encoding_output_dir = config["encoding_output_dir"]
+    serde_output_dir = config["serde_output_dir"]
     Path(encoding_output_dir).mkdir(parents=True, exist_ok=True)
     warmup_steps = config["warmup_steps"]
     training_steps = config["training_steps"]
     is_local = config["is_local"]
     device = config["device"]
     train_bpe = config["train_bpe"]
+    encode_ids = config["encode_ids"]
 
     # Check if input file exists
     input_file = config["input_file"]
@@ -60,11 +79,17 @@ def main(
             num_merge_processes=4,
             num_chunks=1000,
         )
-    tokenizer = bpe_encoding.Tokenizer.get_tokenizer(config["name"], vocab_size, encoding_output_dir)
-    dataset = TextDataset(
-        input_file=input_file,
-        tokenizer=tokenizer,
-    )
+
+    if encode_ids:
+        tokenizer = bpe_encoding.Tokenizer.get_tokenizer(config["name"], vocab_size, encoding_output_dir)
+        dataset = TextDataset(
+            input_file=input_file,
+            tokenizer=tokenizer,
+        )
+        serialize_dataset(serde_output_dir, dataset, f"{config["name"]}_{vocab_size}_dataset.pkl")
+    else:
+        dataset = deserialize_dataset(serde_output_dir, f"{config["name"]}_{vocab_size}_dataset.pkl")
+
     m = model.BasicsTransformerLM(
         vocab_size=vocab_size,
         context_length=context_length,
