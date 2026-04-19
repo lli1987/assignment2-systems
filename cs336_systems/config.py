@@ -15,7 +15,7 @@ benchmark_config = {
     "name": "benchmark",
     "input_file": "/workspace/data/TinyStoriesV2-GPT4-train.txt",
     "encoding_output_dir": "/workspace/code/assignment2-systems/cs336_systems/encoding",
-    "serde_output_dir": "/Users/luyaoli/code/cs336/assignment2-systems/cs336_systems/serde",
+    "serde_output_dir": "/workspace/code/cs336/assignment2-systems/cs336_systems/serde",
     "is_local": False,
     "training_steps": 10,
     "warmup_steps": 100,
