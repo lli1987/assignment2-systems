@@ -8,6 +8,7 @@ from torch.nn.functional import cross_entropy
 from cs336_basics import model, nn_utils, bpe_training, bpe_encoding
 from cs336_systems.utils import TextDataset, get_optimizer, loading_data
 from cs336_systems.config import benchmark_config, local_benchmark_config
+from cs336_systems.replacement import annotated_scaled_dot_product_attention
 from timeit import default_timer
 
 
@@ -99,6 +100,7 @@ def main(
         d_ff=d_ff,
         rope_theta=theta,
     )
+    m.scaled_dot_product_attention = annotated_scaled_dot_product_attention
     m.to(device)
 
     optimizer = get_optimizer(m)
