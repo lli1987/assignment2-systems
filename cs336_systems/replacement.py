@@ -16,6 +16,7 @@ def softmax(x, dim=-1):
     return exponentiated_rescaled_input / torch.sum(exponentiated_rescaled_input, dim=dim, keepdim=True)
 
 
+@nvtx.range("scaled dot product attention")
 def annotated_scaled_dot_product_attention(
     Q: Float[Tensor, " ... queries d_k"],
     K: Float[Tensor, " ... keys    d_k"],
