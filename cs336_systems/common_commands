@@ -1,0 +1,3 @@
+scp -P 22 -i ~/.ssh/id_argocd root@xxx.xx.xx.xxx:/workspace/code/assignment2-systems/result.nsys-rep . 
+
+uv run nsys profile --force-overwrite true -o result --python-backtrace=cuda --pytorch=autograd-nvtx --sample=none --cpuctxsw=none --trace=cuda,nvtx,osrt  python cs336_systems/benchmark.py --context_length 128   --d_model 768   --num_layers 12   --num_heads 12   --d_ff 3072   --theta 10000
