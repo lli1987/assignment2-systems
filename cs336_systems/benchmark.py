@@ -53,7 +53,7 @@ def main(
     theta: int,
     forward_only=True,
 ):
-    config = local_benchmark_config
+    config = benchmark_config
     # Ensure encoding output directory exists
     encoding_output_dir = config["encoding_output_dir"]
     serde_output_dir = config["serde_output_dir"]
