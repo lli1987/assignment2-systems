@@ -91,7 +91,15 @@ def main(
     else:
         dataset = deserialize_dataset(serde_output_dir, f"{config['name']}_{vocab_size}_dataset.pkl")
 
+    import inspect
+
+    functions = inspect.getmembers(model, inspect.isfunction)
+    logger.warning(f"Before replacement: {functions}")
+
     model.scaled_dot_product_attention = annotated_scaled_dot_product_attention
+    functions = inspect.getmembers(model, inspect.isfunction)
+    logger.warning(f"After replacement: {functions}")
+
     m = model.BasicsTransformerLM(
         vocab_size=vocab_size,
         context_length=context_length,
