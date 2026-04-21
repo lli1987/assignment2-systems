@@ -10,6 +10,7 @@ from cs336_systems.utils import TextDataset, get_optimizer, loading_data
 from cs336_systems.config import benchmark_config, local_benchmark_config
 from cs336_systems.replacement import annotated_scaled_dot_product_attention
 from timeit import default_timer
+import torch.cuda.nvtx as nvtx
 
 
 logger = logging.getLogger(__name__)
@@ -91,14 +92,7 @@ def main(
     else:
         dataset = deserialize_dataset(serde_output_dir, f"{config['name']}_{vocab_size}_dataset.pkl")
 
-    import inspect
-
-    functions = inspect.getmembers(model, inspect.isfunction)
-    logger.warning(f"Before replacement: {functions}")
-
     model.scaled_dot_product_attention = annotated_scaled_dot_product_attention
-    functions = inspect.getmembers(model, inspect.isfunction)
-    logger.warning(f"After replacement: {functions}")
 
     m = model.BasicsTransformerLM(
         vocab_size=vocab_size,
@@ -130,15 +124,18 @@ def main(
         x, y = loading_data(ids, context_length, device)
         t0 = get_time(is_local)
         optimizer.zero_grad()
-        o = m.forward(x=x)
+        with nvtx.range("forward"):
+            o = m.forward(x=x)
 
         if t0 and forward_only:
             t1 = get_time(is_local)
             durations.append(t1 - t0)
 
         loss = nn_utils.cross_entropy(o, y)
-        loss.backward()
-        optimizer.step()
+        with nvtx.range("backward"):
+            loss.backward()
+        with nvtx.range("step function"):
+            optimizer.step()
 
         if t0 and not forward_only:
             t1 = get_time(is_local)

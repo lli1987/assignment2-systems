@@ -43,7 +43,6 @@ def annotated_scaled_dot_product_attention(
         with the output of running your scaled dot product attention
         implementation with the provided key, query, and value tensors.
     """
-    logger.warning("using nvtx annotated function <annotated_scaled_dot_product_attention>..")
     d_k = K.shape[-1]
     with nvtx.range("computing attention scores"):
         attention_scores = einsum(Q, K, "... query d_k, ... key d_k -> ... query key") / math.sqrt(d_k)
