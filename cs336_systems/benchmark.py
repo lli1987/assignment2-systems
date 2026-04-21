@@ -91,6 +91,7 @@ def main(
     else:
         dataset = deserialize_dataset(serde_output_dir, f"{config['name']}_{vocab_size}_dataset.pkl")
 
+    model.scaled_dot_product_attention = annotated_scaled_dot_product_attention
     m = model.BasicsTransformerLM(
         vocab_size=vocab_size,
         context_length=context_length,
@@ -100,7 +101,6 @@ def main(
         d_ff=d_ff,
         rope_theta=theta,
     )
-    m.scaled_dot_product_attention = annotated_scaled_dot_product_attention
     m.to(device)
 
     optimizer = get_optimizer(m)
