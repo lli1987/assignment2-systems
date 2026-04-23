@@ -11,6 +11,7 @@ from cs336_systems.config import benchmark_config, local_benchmark_config
 from cs336_systems.replacement import annotated_scaled_dot_product_attention
 from timeit import default_timer
 import torch.cuda.nvtx as nvtx
+from contextlib import nullcontext
 
 
 logger = logging.getLogger(__name__)
@@ -64,6 +65,7 @@ def main(
     device = config["device"]
     train_bpe = config["train_bpe"]
     encode_ids = config["encode_ids"]
+    use_amp = config["use_amp"]
 
     # Check if input file exists
     input_file = config["input_file"]
@@ -108,6 +110,8 @@ def main(
     optimizer = get_optimizer(m)
     ids = dataset.tokens
 
+    ctx = torch.amp.autocast(device_type=device, dtype=torch.bfloat16) if use_amp else nullcontext()
+
     for i in range(warmup_steps):
         x, y = loading_data(ids, context_length, device)
 
@@ -118,43 +122,45 @@ def main(
         optimizer.step()
         logger.warning(f"completed warm up iteration: {i}")
 
-    durations = []
+    # durations = []
 
     for i in range(training_steps):
         x, y = loading_data(ids, context_length, device)
-        t0 = get_time(is_local)
+        # t0 = get_time(is_local)
         optimizer.zero_grad()
         with nvtx.range("forward"):
-            o = m.forward(x=x)
+            with ctx:
+                o = m.forward(x=x)
 
-        if t0 and forward_only:
-            t1 = get_time(is_local)
-            durations.append(t1 - t0)
+        # if t0 and forward_only:
+        #     t1 = get_time(is_local)
+        #     durations.append(t1 - t0)
 
         loss = nn_utils.cross_entropy(o, y)
         with nvtx.range("backward"):
-            loss.backward()
+            with ctx:
+                loss.backward()
         with nvtx.range("step function"):
             optimizer.step()
 
-        if t0 and not forward_only:
-            t1 = get_time(is_local)
-            durations.append(t1 - t0)
+        # if t0 and not forward_only:
+        #     t1 = get_time(is_local)
+        #     durations.append(t1 - t0)
 
-    mean = np.mean(durations)
-    std = np.std(durations)
-    if forward_only:
-        logger.warning(
-            f"Training time (forward-only) - mean: {mean:.4f}, std: {std:.4f} for model "
-            f"vocab_size={vocab_size} context_length={context_length} d_model={d_model} "
-            f"num_layers={num_layers} num_heads={num_heads} d_ff={d_ff} theta={theta}"
-        )
-    else:
-        logger.warning(
-            f"Training time (forward + backward) - mean: {mean:.4f}, std: {std:.4f} for model "
-            f"vocab_size={vocab_size} context_length={context_length} d_model={d_model} "
-            f"num_layers={num_layers} num_heads={num_heads} d_ff={d_ff} theta={theta}"
-        )
+    # mean = np.mean(durations)
+    # std = np.std(durations)
+    # if forward_only:
+    #     logger.warning(
+    #         f"Training time (forward-only) - mean: {mean:.4f}, std: {std:.4f} for model "
+    #         f"vocab_size={vocab_size} context_length={context_length} d_model={d_model} "
+    #         f"num_layers={num_layers} num_heads={num_heads} d_ff={d_ff} theta={theta}"
+    #     )
+    # else:
+    #     logger.warning(
+    #         f"Training time (forward + backward) - mean: {mean:.4f}, std: {std:.4f} for model "
+    #         f"vocab_size={vocab_size} context_length={context_length} d_model={d_model} "
+    #         f"num_layers={num_layers} num_heads={num_heads} d_ff={d_ff} theta={theta}"
+    #     )
 
 
 if __name__ == "__main__":

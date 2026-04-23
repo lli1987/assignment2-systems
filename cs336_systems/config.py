@@ -9,6 +9,7 @@ local_benchmark_config = {
     "device": "cpu",
     "train_bpe": False,
     "encode_ids": False,
+    "use_amp": False,
 }
 
 benchmark_config = {
@@ -17,9 +18,10 @@ benchmark_config = {
     "encoding_output_dir": "/workspace/code/assignment2-systems/cs336_systems/encoding",
     "serde_output_dir": "/workspace/code/assignment2-systems/cs336_systems/serde",
     "is_local": False,
-    "training_steps": 10,
-    "warmup_steps": 100,
+    "training_steps": 500,
+    "warmup_steps": 20,
     "device": "cuda",
     "train_bpe": False,
     "encode_ids": True,
+    "use_amp": True,
 }
