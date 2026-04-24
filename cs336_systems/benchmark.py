@@ -144,7 +144,7 @@ def main(
 
         # Enable memory recording for forward pass only
         if enable_memory_profiling and device == "cuda":
-            torch.cuda.memory._record_memory_history(enabled=True, max_entries=10000)
+            torch.cuda.memory._record_memory_history(enabled="all", max_entries=10000)
 
         with nvtx.range("forward"):
             with ctx:
@@ -160,7 +160,7 @@ def main(
         if enable_memory_profiling and device == "cuda":
             snapshot_path = os.path.join(memory_snapshot_dir, f"memory_snapshot_step_{i}.pickle")
             torch.cuda.memory._dump_snapshot(snapshot_path)
-            torch.cuda.memory._record_memory_history(enabled=False)
+            torch.cuda.memory._record_memory_history(enabled=None)
 
         with nvtx.range("backward"):
             if use_amp:
