@@ -111,15 +111,24 @@ def main(
     ids = dataset.tokens
 
     ctx = torch.amp.autocast(device_type=device, dtype=torch.bfloat16) if use_amp else nullcontext()
+    scaler = torch.amp.GradScaler(device) if use_amp else None
 
     for i in range(warmup_steps):
         x, y = loading_data(ids, context_length, device)
 
         optimizer.zero_grad()
-        o = m.forward(x=x)
-        loss = nn_utils.cross_entropy(o, y)
-        loss.backward()
-        optimizer.step()
+        with ctx:
+            o = m.forward(x=x)
+            loss = nn_utils.cross_entropy(o, y)
+        if use_amp:
+            scaler.scale(loss).backward()
+        else:
+            loss.backward()
+        if use_amp:
+            scaler.step(optimizer)
+            scaler.update()
+        else:
+            optimizer.step()
         logger.warning(f"completed warm up iteration: {i}")
 
     # durations = []
@@ -132,16 +141,22 @@ def main(
             with ctx:
                 o = m.forward(x=x)
 
-        # if t0 and forward_only:
-        #     t1 = get_time(is_local)
-        #     durations.append(t1 - t0)
+                # if t0 and forward_only:
+                #     t1 = get_time(is_local)
+                #     durations.append(t1 - t0)
 
-        loss = nn_utils.cross_entropy(o, y)
+                loss = nn_utils.cross_entropy(o, y)
         with nvtx.range("backward"):
-            with ctx:
+            if use_amp:
+                scaler.scale(loss).backward()
+            else:
                 loss.backward()
         with nvtx.range("step function"):
-            optimizer.step()
+            if use_amp:
+                scaler.step(optimizer)
+                scaler.update()
+            else:
+                optimizer.step()
 
         # if t0 and not forward_only:
         #     t1 = get_time(is_local)
