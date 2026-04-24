@@ -53,12 +53,16 @@ def main(
     d_ff: int,
     theta: int,
     forward_only=True,
+    enable_memory_profiling=False,
 ):
     config = benchmark_config
     # Ensure encoding output directory exists
     encoding_output_dir = config["encoding_output_dir"]
     serde_output_dir = config["serde_output_dir"]
+    memory_snapshot_dir = config["memory_snapshot_dir"]
     Path(encoding_output_dir).mkdir(parents=True, exist_ok=True)
+    if enable_memory_profiling:
+        Path(memory_snapshot_dir).mkdir(parents=True, exist_ok=True)
     warmup_steps = config["warmup_steps"]
     training_steps = config["training_steps"]
     is_local = config["is_local"]
@@ -137,6 +141,11 @@ def main(
         x, y = loading_data(ids, context_length, device)
         # t0 = get_time(is_local)
         optimizer.zero_grad()
+
+        # Enable memory recording for forward pass only
+        if enable_memory_profiling and device == "cuda":
+            torch.cuda.memory._record_memory_history(enabled=True, max_entries=10000)
+
         with nvtx.range("forward"):
             with ctx:
                 o = m.forward(x=x)
@@ -146,6 +155,13 @@ def main(
                 #     durations.append(t1 - t0)
 
                 loss = nn_utils.cross_entropy(o, y)
+
+        # Dump memory snapshot after forward pass
+        if enable_memory_profiling and device == "cuda":
+            snapshot_path = os.path.join(memory_snapshot_dir, f"memory_snapshot_step_{i}.pickle")
+            torch.cuda.memory._dump_snapshot(snapshot_path)
+            torch.cuda.memory._record_memory_history(enabled=False)
+
         with nvtx.range("backward"):
             if use_amp:
                 scaler.scale(loss).backward()
@@ -216,6 +232,12 @@ if __name__ == "__main__":
         required=True,
         help="Rope theta value",
     )
+    parser.add_argument(
+        "--enable_memory_profiling",
+        action="store_true",
+        help="Enable CUDA memory profiling",
+    )
 
     args = parser.parse_args()
-    main(10000, args.context_length, args.d_model, args.num_layers, args.num_heads, args.d_ff, args.theta)
+    main(10000, args.context_length, args.d_model, args.num_layers, args.num_heads, args.d_ff, args.theta,
+         enable_memory_profiling=args.enable_memory_profiling)
