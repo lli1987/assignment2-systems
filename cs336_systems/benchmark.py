@@ -158,7 +158,7 @@ def main(
 
         # Dump memory snapshot after forward pass
         if enable_memory_profiling and device == "cuda":
-            snapshot_path = os.path.join(memory_snapshot_dir, f"memory_snapshot_step_{i}.pickle")
+            snapshot_path = os.path.join(memory_snapshot_dir, f"forward_memory_snapshot_step_{i}.pickle")
             torch.cuda.memory._dump_snapshot(snapshot_path)
             torch.cuda.memory._record_memory_history(enabled=None)
 
@@ -167,12 +167,23 @@ def main(
                 scaler.scale(loss).backward()
             else:
                 loss.backward()
+
+        # Enable memory recording for step function
+        if enable_memory_profiling and device == "cuda":
+            torch.cuda.memory._record_memory_history(enabled="all", max_entries=10000)
+
         with nvtx.range("step function"):
             if use_amp:
                 scaler.step(optimizer)
                 scaler.update()
             else:
                 optimizer.step()
+
+        # Dump memory snapshot after step function
+        if enable_memory_profiling and device == "cuda":
+            snapshot_path = os.path.join(memory_snapshot_dir, f"optim_step_memory_snapshot_{i}.pickle")
+            torch.cuda.memory._dump_snapshot(snapshot_path)
+            torch.cuda.memory._record_memory_history(enabled=None)
 
         # if t0 and not forward_only:
         #     t1 = get_time(is_local)
@@ -239,5 +250,13 @@ if __name__ == "__main__":
     )
 
     args = parser.parse_args()
-    main(10000, args.context_length, args.d_model, args.num_layers, args.num_heads, args.d_ff, args.theta,
-         enable_memory_profiling=args.enable_memory_profiling)
+    main(
+        10000,
+        args.context_length,
+        args.d_model,
+        args.num_layers,
+        args.num_heads,
+        args.d_ff,
+        args.theta,
+        enable_memory_profiling=args.enable_memory_profiling,
+    )

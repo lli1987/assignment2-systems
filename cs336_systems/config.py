@@ -20,10 +20,10 @@ benchmark_config = {
     "serde_output_dir": "/workspace/code/assignment2-systems/cs336_systems/serde",
     "memory_snapshot_dir": "/workspace/temp/memory_snapshots",
     "is_local": False,
-    "training_steps": 500,
+    "training_steps": 200,
     "warmup_steps": 20,
     "device": "cuda",
     "train_bpe": False,
-    "encode_ids": True,
+    "encode_ids": False,
     "use_amp": True,
 }
