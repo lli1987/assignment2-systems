@@ -1,3 +1,15 @@
-scp -P 22 -i ~/.ssh/id_argocd root@xxx.xx.xx.xxx:/workspace/code/assignment2-systems/result.nsys-rep . 
+scp -P 22 -i ~/.ssh/id_argocd root@xxx.xx.xx.xxx:/workspace/code/assignment2-systems/result.nsys-rep .
 
 uv run nsys profile --force-overwrite true -o result --python-backtrace=cuda --pytorch=autograd-nvtx --sample=none --cpuctxsw=none --trace=cuda,nvtx,osrt  python cs336_systems/benchmark.py --context_length 128   --d_model 768   --num_layers 12   --num_heads 12   --d_ff 3072   --theta 10000 --enable_memory_profiling
+
+# Benchmark attention at different scales (uncompiled only)
+uv run python cs336_systems/benchmark_attention.py --batch_size 8 --num_iterations 100 --num_warmup 10 --device cuda --output_dir ./benchmark_results
+
+# Benchmark attention comparing compiled vs uncompiled
+uv run python cs336_systems/benchmark_attention.py --batch_size 8 --num_iterations 100 --num_warmup 10 --device cuda --output_dir ./benchmark_results --compare_compile
+
+# Benchmark full transformer model (uncompiled)
+uv run python cs336_systems/benchmark.py --context_length 128 --d_model 768 --num_layers 12 --num_heads 12 --d_ff 3072 --theta 10000
+
+# Benchmark full transformer model (compiled)
+uv run python cs336_systems/benchmark.py --context_length 128 --d_model 768 --num_layers 12 --num_heads 12 --d_ff 3072 --theta 10000 --use_compile

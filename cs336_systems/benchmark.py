@@ -54,6 +54,7 @@ def main(
     theta: int,
     forward_only=True,
     enable_memory_profiling=False,
+    use_compile=False,
 ):
     config = benchmark_config
     # Ensure encoding output directory exists
@@ -111,11 +112,22 @@ def main(
     )
     m.to(device)
 
+    # Optionally compile the model
+    if use_compile:
+        m = torch.compile(m)
+        logger.warning("Model compiled with torch.compile")
+
     optimizer = get_optimizer(m)
     ids = dataset.tokens
 
     ctx = torch.amp.autocast(device_type=device, dtype=torch.bfloat16) if use_amp else nullcontext()
     scaler = torch.amp.GradScaler(device) if use_amp else None
+
+    # Initialize timing lists
+    forward_durations = []
+    backward_durations = []
+    step_durations = []
+    end_to_end_durations = []
 
     for i in range(warmup_steps):
         x, y = loading_data(ids, context_length, device)
@@ -135,26 +147,26 @@ def main(
             optimizer.step()
         logger.warning(f"completed warm up iteration: {i}")
 
-    # durations = []
-
     for i in range(training_steps):
         x, y = loading_data(ids, context_length, device)
-        # t0 = get_time(is_local)
+
+        # Start end-to-end timing
+        t_end_to_end_start = get_time(is_local)
+
         optimizer.zero_grad()
 
         # Enable memory recording for forward pass only
         if enable_memory_profiling and device == "cuda":
             torch.cuda.memory._record_memory_history(enabled="all", max_entries=10000)
 
+        # Time forward pass
+        t_forward_start = get_time(is_local)
         with nvtx.range("forward"):
             with ctx:
                 o = m.forward(x=x)
-
-                # if t0 and forward_only:
-                #     t1 = get_time(is_local)
-                #     durations.append(t1 - t0)
-
                 loss = nn_utils.cross_entropy(o, y)
+        t_forward_end = get_time(is_local)
+        forward_durations.append(t_forward_end - t_forward_start)
 
         # Dump memory snapshot after forward pass
         if enable_memory_profiling and device == "cuda":
@@ -162,22 +174,30 @@ def main(
             torch.cuda.memory._dump_snapshot(snapshot_path)
             torch.cuda.memory._record_memory_history(enabled=None)
 
+        # Time backward pass
+        t_backward_start = get_time(is_local)
         with nvtx.range("backward"):
             if use_amp:
                 scaler.scale(loss).backward()
             else:
                 loss.backward()
+        t_backward_end = get_time(is_local)
+        backward_durations.append(t_backward_end - t_backward_start)
 
         # Enable memory recording for step function
         if enable_memory_profiling and device == "cuda":
             torch.cuda.memory._record_memory_history(enabled="all", max_entries=10000)
 
+        # Time optimizer step
+        t_step_start = get_time(is_local)
         with nvtx.range("step function"):
             if use_amp:
                 scaler.step(optimizer)
                 scaler.update()
             else:
                 optimizer.step()
+        t_step_end = get_time(is_local)
+        step_durations.append(t_step_end - t_step_start)
 
         # Dump memory snapshot after step function
         if enable_memory_profiling and device == "cuda":
@@ -185,24 +205,34 @@ def main(
             torch.cuda.memory._dump_snapshot(snapshot_path)
             torch.cuda.memory._record_memory_history(enabled=None)
 
-        # if t0 and not forward_only:
-        #     t1 = get_time(is_local)
-        #     durations.append(t1 - t0)
+        # End-to-end timing
+        t_end_to_end_end = get_time(is_local)
+        end_to_end_durations.append(t_end_to_end_end - t_end_to_end_start)
 
-    # mean = np.mean(durations)
-    # std = np.std(durations)
-    # if forward_only:
-    #     logger.warning(
-    #         f"Training time (forward-only) - mean: {mean:.4f}, std: {std:.4f} for model "
-    #         f"vocab_size={vocab_size} context_length={context_length} d_model={d_model} "
-    #         f"num_layers={num_layers} num_heads={num_heads} d_ff={d_ff} theta={theta}"
-    #     )
-    # else:
-    #     logger.warning(
-    #         f"Training time (forward + backward) - mean: {mean:.4f}, std: {std:.4f} for model "
-    #         f"vocab_size={vocab_size} context_length={context_length} d_model={d_model} "
-    #         f"num_layers={num_layers} num_heads={num_heads} d_ff={d_ff} theta={theta}"
-    #     )
+    # Calculate statistics (convert to milliseconds)
+    forward_mean_ms = np.mean(forward_durations) * 1000
+    forward_std_ms = np.std(forward_durations) * 1000
+    backward_mean_ms = np.mean(backward_durations) * 1000
+    backward_std_ms = np.std(backward_durations) * 1000
+    step_mean_ms = np.mean(step_durations) * 1000
+    step_std_ms = np.std(step_durations) * 1000
+    end_to_end_mean_ms = np.mean(end_to_end_durations) * 1000
+    end_to_end_std_ms = np.std(end_to_end_durations) * 1000
+
+    # Report statistics
+    compile_status = "compiled" if use_compile else "uncompiled"
+    logger.warning(f"\n{'='*80}")
+    logger.warning(f"BENCHMARK RESULTS ({compile_status})")
+    logger.warning(f"{'='*80}")
+    logger.warning(f"Model config: vocab_size={vocab_size}, context_length={context_length}, "
+                   f"d_model={d_model}, num_layers={num_layers}, num_heads={num_heads}, "
+                   f"d_ff={d_ff}, theta={theta}")
+    logger.warning(f"{'-'*80}")
+    logger.warning(f"Forward pass      - mean: {forward_mean_ms:8.4f} ± {forward_std_ms:7.4f} ms")
+    logger.warning(f"Backward pass     - mean: {backward_mean_ms:8.4f} ± {backward_std_ms:7.4f} ms")
+    logger.warning(f"Optimizer step    - mean: {step_mean_ms:8.4f} ± {step_std_ms:7.4f} ms")
+    logger.warning(f"End-to-end        - mean: {end_to_end_mean_ms:8.4f} ± {end_to_end_std_ms:7.4f} ms")
+    logger.warning(f"{'='*80}\n")
 
 
 if __name__ == "__main__":
@@ -248,6 +278,11 @@ if __name__ == "__main__":
         action="store_true",
         help="Enable CUDA memory profiling",
     )
+    parser.add_argument(
+        "--use_compile",
+        action="store_true",
+        help="Use torch.compile to compile the model",
+    )
 
     args = parser.parse_args()
     main(
@@ -259,4 +294,5 @@ if __name__ == "__main__":
         args.d_ff,
         args.theta,
         enable_memory_profiling=args.enable_memory_profiling,
+        use_compile=args.use_compile,
     )
