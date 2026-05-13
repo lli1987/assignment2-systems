@@ -127,6 +127,7 @@ def flash_fwd_kernel(
     # Offset each pointer with the corresponding batch index
     # multiplied with the batch stride for each tensor
     # Q block pointer: points to the query_tile_index-th tile of queries
+    # [B, Bq, D]
     Q_block_ptr = tl.make_block_ptr(
         Q_ptr + batch_index * stride_qb,
         shape=(N_QUERIES, D),
@@ -137,6 +138,7 @@ def flash_fwd_kernel(
     )
 
     # O block pointer: points to the query_tile_index-th tile of output
+    # [B, Bq, D]
     O_block_ptr = tl.make_block_ptr(
         O_ptr + batch_index * stride_ob,
         shape=(N_QUERIES, D),
@@ -147,6 +149,7 @@ def flash_fwd_kernel(
     )
 
     # L block pointer: 1D tensor, points to query_tile_index-th tile of logsumexp
+    # [B, Bq]
     L_block_ptr = tl.make_block_ptr(
         L_ptr + batch_index * stride_lb,
         shape=(N_QUERIES,),
@@ -157,6 +160,7 @@ def flash_fwd_kernel(
     )
 
     # K block pointer: starts at beginning, will advance in loop over key tiles
+    # [B, Bk, D]
     K_block_ptr = tl.make_block_ptr(
         K_ptr + batch_index * stride_kb,
         shape=(N_KEYS, D),
@@ -167,6 +171,7 @@ def flash_fwd_kernel(
     )
 
     # V block pointer: starts at beginning, will advance in loop over key tiles
+    # [B, Bk, D]
     V_block_ptr = tl.make_block_ptr(
         V_ptr + batch_index * stride_vb,
         shape=(N_KEYS, D),
@@ -177,9 +182,13 @@ def flash_fwd_kernel(
     )
 
     q_block = tl.load(Q_block_ptr, boundary_check=(0, 1), padding_option="zero")
+    m_i = 
 
     for i in range(tl.cdiv(N_KEYS, K_TILE_SIZE)):
 
         k_block = tl.load(K_block_ptr, boundary_check=(0, 1), padding_option="zero")
-
+        # S's shape [B, Bq, Bk]
         S_block = tl.dot(q_block, tl.trans(k_block)) * scale
+        # m's shape [B, Bq]
+        m_i = tl.max(S_block, dim=-1)
+        m_i_new = tl.max(m_i, )
