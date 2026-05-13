@@ -1,5 +1,4 @@
 import torch
-import torch.nn.functional as fn
 import triton
 import triton.language as tl
 
@@ -182,13 +181,37 @@ def flash_fwd_kernel(
     )
 
     q_block = tl.load(Q_block_ptr, boundary_check=(0, 1), padding_option="zero")
-    m_i = 
+    m_i = tl.full((Q_TILE_SIZE,), -float("inf"), dtype=tl.float32)
+    l_i = tl.zeros((Q_TILE_SIZE,), dtype=tl.float32)
+    O_i = tl.zeros((Q_TILE_SIZE, D), dtype=tl.float32)
 
-    for i in range(tl.cdiv(N_KEYS, K_TILE_SIZE)):
-
-        k_block = tl.load(K_block_ptr, boundary_check=(0, 1), padding_option="zero")
+    for j in range(tl.cdiv(N_KEYS, K_TILE_SIZE)):
+        K_block = tl.load(K_block_ptr, boundary_check=(0, 1), padding_option="zero")
+        V_block = tl.load(V_block_ptr, boundary_check=(0, 1), padding_option="zero")
         # S's shape [B, Bq, Bk]
-        S_block = tl.dot(q_block, tl.trans(k_block)) * scale
+        S_block = tl.dot(q_block, tl.trans(K_block)) * scale
         # m's shape [B, Bq]
-        m_i = tl.max(S_block, dim=-1)
-        m_i_new = tl.max(m_i, )
+        m_j_1 = m_i
+        m_j = tl.maximum(m_i, tl.max(S_block, dim=-1))
+        m_i = m_j
+
+        # P's shape [B, Bq, Bk]
+        P_j = tl.exp(S_block - m_j)
+
+        # l's shape [B, Bq]
+        l_j_1 = l_i
+        l_j = tl.exp(m_j_1 - m_j) * l_j_1 + tl.sum(P_j, dim=-1)
+        l_i = l_j
+
+        # O's shape [B, Bq, D]
+        O_j_1 = O_i
+        O_i = tl.exp(m_j_1 - m_j)[:, None] * O_j_1 + tl.dot(P_j, V_block)
+
+        K_block_ptr = K_block_ptr.advance((0, K_TILE_SIZE))
+        V_block_ptr = V_block_ptr.advance((K_TILE_SIZE,))
+    O_i = O_i / l_i[:, None]
+    l_i = m_i + tl.log(l_i)
+
+    tl.store(O_block_ptr, O_i, boundary_check=(0, 1))
+    tl.store(L_block_ptr, l_i, boundary_check=(0, 1))
+    return O_i
