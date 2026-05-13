@@ -1,5 +1,7 @@
 import torch
 import torch.nn.functional as fn
+import triton
+import triton.language as tl
 
 
 class FlashAttentionPyTorch(torch.autograd.Function):
@@ -88,3 +90,96 @@ class FlashAttentionPyTorch(torch.autograd.Function):
     @staticmethod
     def backward(ctx, dO):
         raise NotImplementedError
+
+
+@triton.jit
+def flash_fwd_kernel(
+    Q_ptr,
+    K_ptr,
+    V_ptr,
+    O_ptr,
+    L_ptr,
+    stride_qb,
+    stride_qq,
+    stride_qd,
+    stride_kb,
+    stride_kk,
+    stride_kd,
+    stride_vb,
+    stride_vk,
+    stride_vd,
+    stride_ob,
+    stride_oq,
+    stride_od,
+    stride_lb,
+    stride_lq,
+    N_QUERIES,
+    N_KEYS,
+    scale,
+    D: tl.constexpr,
+    Q_TILE_SIZE: tl.constexpr,
+    K_TILE_SIZE: tl.constexpr,
+):
+    # Program indices
+    query_tile_index = tl.program_id(0)
+    batch_index = tl.program_id(1)
+
+    # Offset each pointer with the corresponding batch index
+    # multiplied with the batch stride for each tensor
+    # Q block pointer: points to the query_tile_index-th tile of queries
+    Q_block_ptr = tl.make_block_ptr(
+        Q_ptr + batch_index * stride_qb,
+        shape=(N_QUERIES, D),
+        strides=(stride_qq, stride_qd),
+        offsets=(query_tile_index * Q_TILE_SIZE, 0),
+        block_shape=(Q_TILE_SIZE, D),
+        order=(1, 0),
+    )
+
+    # O block pointer: points to the query_tile_index-th tile of output
+    O_block_ptr = tl.make_block_ptr(
+        O_ptr + batch_index * stride_ob,
+        shape=(N_QUERIES, D),
+        strides=(stride_oq, stride_od),
+        offsets=(query_tile_index * Q_TILE_SIZE, 0),
+        block_shape=(Q_TILE_SIZE, D),
+        order=(1, 0),
+    )
+
+    # L block pointer: 1D tensor, points to query_tile_index-th tile of logsumexp
+    L_block_ptr = tl.make_block_ptr(
+        L_ptr + batch_index * stride_lb,
+        shape=(N_QUERIES,),
+        strides=(stride_lq,),
+        offsets=(query_tile_index * Q_TILE_SIZE,),
+        block_shape=(Q_TILE_SIZE,),
+        order=(0,),
+    )
+
+    # K block pointer: starts at beginning, will advance in loop over key tiles
+    K_block_ptr = tl.make_block_ptr(
+        K_ptr + batch_index * stride_kb,
+        shape=(N_KEYS, D),
+        strides=(stride_kk, stride_kd),
+        offsets=(0, 0),  # Start at first key tile
+        block_shape=(K_TILE_SIZE, D),
+        order=(1, 0),
+    )
+
+    # V block pointer: starts at beginning, will advance in loop over key tiles
+    V_block_ptr = tl.make_block_ptr(
+        V_ptr + batch_index * stride_vb,
+        shape=(N_KEYS, D),
+        strides=(stride_vk, stride_vd),
+        offsets=(0, 0),  # Start at first value tile
+        block_shape=(K_TILE_SIZE, D),
+        order=(1, 0),
+    )
+
+    q_block = tl.load(Q_block_ptr, boundary_check=(0, 1), padding_option="zero")
+
+    for i in range(tl.cdiv(N_KEYS, K_TILE_SIZE)):
+
+        k_block = tl.load(K_block_ptr, boundary_check=(0, 1), padding_option="zero")
+
+        S_block = tl.dot(q_block, tl.trans(k_block)) * scale
