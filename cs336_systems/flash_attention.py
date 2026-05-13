@@ -132,6 +132,7 @@ class FlashAttentionTriton(torch.autograd.Function):
             Q_TILE_SIZE=32,
             K_TILE_SIZE=32,
         )
+        ctx.save_for_backward(Q, K, V, O, L)
         return O
 
     @staticmethod
