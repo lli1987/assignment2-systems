@@ -91,6 +91,54 @@ class FlashAttentionPyTorch(torch.autograd.Function):
         raise NotImplementedError
 
 
+class FlashAttentionTriton(torch.autograd.Function):
+    """
+    FlashAttention-2 forward pass implemented with pure PyTorch tiled operations.
+    Tile sizes are at least 16×16; inputs are assumed to be powers of 2 >= 16.
+    """
+
+    @staticmethod
+    def forward(ctx, Q, K, V, is_causal=False):
+        BQ, N_QUERIES, D = Q.shape
+        BK, N_KEYS, D = K.shape
+
+        O = torch.zeros_like(Q)
+        L = torch.zeros((BQ, N_QUERIES), dtype=torch.float32, device=Q.device)
+        grid = (triton.cdiv(N_QUERIES, 32), BQ)
+        flash_fwd_kernel[grid](
+            Q_ptr=Q,
+            K_ptr=K,
+            V_ptr=V,
+            O_ptr=O,
+            L_ptr=L,
+            stride_qb=Q.stride(0),
+            stride_qq=Q.stride(1),
+            stride_qd=Q.stride(2),
+            stride_kb=K.stride(0),
+            stride_kk=K.stride(1),
+            stride_kd=K.stride(2),
+            stride_vb=V.stride(0),
+            stride_vk=V.stride(1),
+            stride_vd=V.stride(2),
+            stride_ob=O.stride(0),
+            stride_oq=O.stride(1),
+            stride_od=O.stride(2),
+            stride_lb=L.stride(0),
+            stride_lq=L.stride(1),
+            N_QUERIES=N_QUERIES,
+            N_KEYS=N_KEYS,
+            scale=D**-0.5,
+            D=D,
+            Q_TILE_SIZE=32,
+            K_TILE_SIZE=32,
+        )
+        return O
+
+    @staticmethod
+    def backward(ctx, dO):
+        raise NotImplementedError
+
+
 @triton.jit
 def flash_fwd_kernel(
     Q_ptr,
@@ -192,26 +240,25 @@ def flash_fwd_kernel(
         S_block = tl.dot(q_block, tl.trans(K_block)) * scale
         # m's shape [B, Bq]
         m_j_1 = m_i
-        m_j = tl.maximum(m_i, tl.max(S_block, dim=-1))
+        m_j = tl.maximum(m_i, tl.max(S_block, axis=-1))
         m_i = m_j
 
         # P's shape [B, Bq, Bk]
-        P_j = tl.exp(S_block - m_j)
+        P_j = tl.exp(S_block - m_j[:, None])
 
         # l's shape [B, Bq]
         l_j_1 = l_i
-        l_j = tl.exp(m_j_1 - m_j) * l_j_1 + tl.sum(P_j, dim=-1)
+        l_j = tl.exp(m_j_1 - m_j) * l_j_1 + tl.sum(P_j, axis=-1)
         l_i = l_j
 
         # O's shape [B, Bq, D]
         O_j_1 = O_i
         O_i = tl.exp(m_j_1 - m_j)[:, None] * O_j_1 + tl.dot(P_j, V_block)
 
-        K_block_ptr = K_block_ptr.advance((0, K_TILE_SIZE))
-        V_block_ptr = V_block_ptr.advance((K_TILE_SIZE,))
+        K_block_ptr = tl.advance(K_block_ptr, (K_TILE_SIZE, 0))
+        V_block_ptr = tl.advance(V_block_ptr, (K_TILE_SIZE, 0))
     O_i = O_i / l_i[:, None]
     l_i = m_i + tl.log(l_i)
 
     tl.store(O_block_ptr, O_i, boundary_check=(0, 1))
-    tl.store(L_block_ptr, l_i, boundary_check=(0, 1))
-    return O_i
+    tl.store(L_block_ptr, l_i, boundary_check=(0,))
