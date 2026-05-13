@@ -131,6 +131,7 @@ class FlashAttentionTriton(torch.autograd.Function):
             D=D,
             Q_TILE_SIZE=32,
             K_TILE_SIZE=32,
+            is_causal=is_causal,
         )
         ctx.save_for_backward(Q, K, V, O, L)
         return O
@@ -167,6 +168,7 @@ def flash_fwd_kernel(
     D: tl.constexpr,
     Q_TILE_SIZE: tl.constexpr,
     K_TILE_SIZE: tl.constexpr,
+    is_casual: tl.constexpr,
 ):
     # Program indices
     query_tile_index = tl.program_id(0)
@@ -239,6 +241,15 @@ def flash_fwd_kernel(
         V_block = tl.load(V_block_ptr, boundary_check=(0, 1), padding_option="zero")
         # S's shape [B, Bq, Bk]
         S_block = tl.dot(q_block, tl.trans(K_block)) * scale
+
+        if is_casual:
+            row_offset = query_tile_index * Q_TILE_SIZE
+            col_offset = j * K_TILE_SIZE
+            rows = tl.arange(0, Q_TILE_SIZE) + row_offset
+            cols = tl.arange(0, K_TILE_SIZE) + col_offset
+            casual_mask = rows[:, None] >= cols[None, :]
+            S_block = tl.where(casual_mask, S_block, 1e-6)
+
         # m's shape [B, Bq]
         m_j_1 = m_i
         m_j = tl.maximum(m_i, tl.max(S_block, axis=-1))
