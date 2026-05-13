@@ -34,7 +34,7 @@ def get_flashattention_autograd_function_triton() -> Type:
     # For example: return MyTritonFlashAttentionAutogradFunctionClass
     from cs336_systems.flash_attention import FlashAttentionTriton
 
-    raise FlashAttentionTriton
+    return FlashAttentionTriton
 
 
 def get_ddp_individual_parameters(module: torch.nn.Module) -> torch.nn.Module:
