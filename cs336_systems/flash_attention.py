@@ -88,7 +88,18 @@ class FlashAttentionPyTorch(torch.autograd.Function):
 
     @staticmethod
     def backward(ctx, dO):
-        raise NotImplementedError
+        Q, K, V, O, L = ctx.saved_tensors
+        # compute dK, dQ, dV
+        _, _, d = Q.shape
+        S = torch.matmul(Q, K.transpose(-1, -2)) * d**-0.5  # [B, Nq, Nk]
+        P = torch.exp(S - L.unsqueeze(-1))  # [B, Nq, Nk]
+        D = torch.matmul(O, dO.transpose(-1, -2))  # [B, Nq, d]
+        dV = torch.matmul(P.transpose(-1, -2), dO)  # [B, Nk, d]
+        dP = torch.matmul(dO, V.transpose(-1, -2))  # [B, Nq, Nk]
+        dS = P * (dP - D)  # [B, Nq, Nk]
+        dQ = torch.matmul(dS, K) * d**-0.5
+        dK = torch.matmul(dS.transpose(-1, -2), Q) * d**-0.5
+        return dQ, dK, dV
 
 
 class FlashAttentionTriton(torch.autograd.Function):
@@ -139,7 +150,18 @@ class FlashAttentionTriton(torch.autograd.Function):
 
     @staticmethod
     def backward(ctx, dO):
-        raise NotImplementedError
+        Q, K, V, O, L = ctx.saved_tensors
+        # compute dK, dQ, dV
+        _, _, d = Q.shape
+        S = torch.matmul(Q, K.transpose(-1, -2)) * d**-0.5  # [B, Nq, Nk]
+        P = torch.exp(S - L.unsqueeze(-1))  # [B, Nq, Nk]
+        D = torch.matmul(O, dO.transpose(-1, -2))  # [B, Nq, d]
+        dV = torch.matmul(P.transpose(-1, -2), dO)  # [B, Nk, d]
+        dP = torch.matmul(dO, V.transpose(-1, -2))  # [B, Nq, Nk]
+        dS = P * (dP - D)  # [B, Nq, Nk]
+        dQ = torch.matmul(dS, K) * d**-0.5
+        dK = torch.matmul(dS.transpose(-1, -2), Q) * d**-0.5
+        return dQ, dK, dV
 
 
 @triton.jit
