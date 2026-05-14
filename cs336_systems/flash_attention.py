@@ -161,7 +161,7 @@ class FlashAttentionTriton(torch.autograd.Function):
         dS = P * (dP - D.unsqueeze(-1))  # [B, Nq, Nk]
         dQ = torch.matmul(dS, K) * d**-0.5
         dK = torch.matmul(dS.transpose(-1, -2), Q) * d**-0.5
-        return dQ, dK, dV, ctx.is_casual
+        return dQ, dK, dV, None
 
 
 @triton.jit
