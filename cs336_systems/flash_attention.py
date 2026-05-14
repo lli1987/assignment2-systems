@@ -10,7 +10,7 @@ class FlashAttentionPyTorch(torch.autograd.Function):
     """
 
     @staticmethod
-    def forward(ctx, Q, K, V, is_causal=False):
+    def forward(ctx, Q, K, V, is_casual=False):
         # Q, K, V: (batch, seq_len, d_head)
         B, N, d = Q.shape
         scale = d**-0.5
@@ -98,7 +98,7 @@ class FlashAttentionTriton(torch.autograd.Function):
     """
 
     @staticmethod
-    def forward(ctx, Q, K, V, is_causal=False):
+    def forward(ctx, Q, K, V, is_casual=False):
         BQ, N_QUERIES, D = Q.shape
         BK, N_KEYS, D = K.shape
 
@@ -131,7 +131,7 @@ class FlashAttentionTriton(torch.autograd.Function):
             D=D,
             Q_TILE_SIZE=32,
             K_TILE_SIZE=32,
-            is_causal=is_causal,
+            is_casual=is_casual,
         )
         ctx.save_for_backward(Q, K, V, O, L)
         return O
