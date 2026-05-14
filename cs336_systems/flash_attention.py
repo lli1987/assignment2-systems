@@ -158,7 +158,7 @@ class FlashAttentionTriton(torch.autograd.Function):
         S = torch.matmul(Q, K.transpose(-1, -2)) * d**-0.5  # [B, Nq, Nk]
 
         if is_casual:
-            mask = torch.tril(torch.ones(Nq, Nk), device=Q.device, dtype=torch.bool)
+            mask = torch.tril(torch.ones(Nq, Nk, device=Q.device, dtype=torch.bool))
             S = S.masked_fill(~mask, -1e6)
         P = torch.exp(S - L.unsqueeze(-1))  # [B, Nq, Nk]
         D = (O * dO).sum(dim=-1)  # [B, Nq]
