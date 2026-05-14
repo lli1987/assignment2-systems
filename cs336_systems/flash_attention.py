@@ -249,7 +249,7 @@ def flash_fwd_kernel(
             rows = tl.arange(0, Q_TILE_SIZE) + row_offset
             cols = tl.arange(0, K_TILE_SIZE) + col_offset
             casual_mask = rows[:, None] >= cols[None, :]
-            S_block = tl.where(casual_mask, S_block, 1e-6)
+            S_block = tl.where(casual_mask, S_block, -1e6)
 
         # m's shape [B, Bq]
         m_j_1 = m_i
