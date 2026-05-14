@@ -151,14 +151,22 @@ class FlashAttentionTriton(torch.autograd.Function):
     @staticmethod
     def backward(ctx, dO):
         Q, K, V, O, L = ctx.saved_tensors
+        is_casual = ctx.is_casual
         # compute dK, dQ, dV
-        _, _, d = Q.shape
+        _, Nq, d = Q.shape
+        _, Nk, d = K.shape
         S = torch.matmul(Q, K.transpose(-1, -2)) * d**-0.5  # [B, Nq, Nk]
+
+        if is_casual:
+            mask = torch.tril(torch.ones(Nq, Nk), device=Q.device, dtype=torch.bool)
+            S = S.masked_fill(~mask, -1e6)
         P = torch.exp(S - L.unsqueeze(-1))  # [B, Nq, Nk]
         D = (O * dO).sum(dim=-1)  # [B, Nq]
         dV = torch.matmul(P.transpose(-1, -2), dO)  # [B, Nk, d]
         dP = torch.matmul(dO, V.transpose(-1, -2))  # [B, Nq, Nk]
         dS = P * (dP - D.unsqueeze(-1))  # [B, Nq, Nk]
+        if is_casual:
+            dS = dS.masked_fill(~mask, 0.0)
         dQ = torch.matmul(dS, K) * d**-0.5
         dK = torch.matmul(dS.transpose(-1, -2), Q) * d**-0.5
         return dQ, dK, dV, None
