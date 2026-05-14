@@ -134,6 +134,7 @@ class FlashAttentionTriton(torch.autograd.Function):
             is_casual=is_casual,
         )
         ctx.save_for_backward(Q, K, V, O, L)
+        ctx.is_casual = is_casual
         return O
 
     @staticmethod
