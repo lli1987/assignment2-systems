@@ -13,3 +13,12 @@ uv run python cs336_systems/benchmark.py --context_length 128 --d_model 768 --nu
 
 # Benchmark full transformer model (compiled)
 uv run python cs336_systems/benchmark.py --context_length 128 --d_model 768 --num_layers 12 --num_heads 12 --d_ff 3072 --theta 10000 --use_compile
+
+# Benchmark FlashAttention-2 (Triton) vs PyTorch - Full sweep
+uv run python cs336_systems/benchmark_flash_attention.py --output_dir ./flash_benchmark_results
+
+# Benchmark FlashAttention-2 - Quick test (small configs only)
+uv run python cs336_systems/benchmark_flash_attention.py --max_seq_len 1024 --max_d_model 64 --output_dir ./flash_benchmark_test
+
+# Benchmark FlashAttention-2 - Custom range
+uv run python cs336_systems/benchmark_flash_attention.py --min_seq_len 1024 --max_seq_len 8192 --min_d_model 32 --max_d_model 128 --output_dir ./flash_benchmark_custom
