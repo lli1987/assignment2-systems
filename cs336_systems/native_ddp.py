@@ -16,118 +16,6 @@ def setup_process_group(rank: int, world_size: int, backend: str, port: int = 29
     dist.init_process_group(backend, rank=rank, world_size=world_size)
 
 
-def train_func(rank, world_size, batch_data, model, optimizer, backend="gloo"):
-    setup_process_group(rank, world_size, backend)
-
-    # Set device based on backend
-    if backend == "nccl":
-        device = torch.device(f"cuda:{rank}")
-    else:
-        device = torch.device("cpu")
-
-    # Move model to the correct device
-    model = model.to(device)
-
-    # CRITICAL FIX #1: Broadcast parameters from rank 0 to all other ranks
-    # This ensures all processes start with the same initial model
-    for param in model.parameters():
-        dist.broadcast(param.data, src=0)
-
-    # IMPROVEMENT: Use clearer data sharding logic
-    # Each rank gets batch_size / world_size examples
-    local_bs = batch_data.size(0) // world_size
-    offset = rank * local_bs
-    rows = batch_data[offset : offset + local_bs].to(device)
-
-    optimizer.zero_grad()
-    loss = model.forward(rows).mean()
-    loss.backward()
-
-    # All-reduce gradients across all ranks (averaging them)
-    for name, param in model.named_parameters():
-        if param.grad is not None:
-            dist.all_reduce(param.grad, dist.ReduceOp.AVG)
-
-    optimizer.step()
-
-    # Clean up process group
-    dist.destroy_process_group()
-
-    # Return the updated model (will be sent back to main process)
-    return model
-
-
-def train_func_multiple_steps(rank, world_size, batch_data, model, optimizer, backend, num_steps):
-    """
-    Training function that supports multiple training steps.
-    This is useful for verification tests.
-    """
-    setup_process_group(rank, world_size, backend)
-
-    # Set device based on backend
-    if backend == "nccl":
-        device = torch.device(f"cuda:{rank}")
-    else:
-        device = torch.device("cpu")
-
-    # Move model to the correct device
-    model = model.to(device)
-
-    # CRITICAL FIX #1: Broadcast parameters from rank 0 to all other ranks
-    # This ensures all processes start with the same initial model
-    for param in model.parameters():
-        dist.broadcast(param.data, src=0)
-
-    # Perform multiple training steps
-    for step in range(num_steps):
-        # IMPROVEMENT: Use clearer data sharding logic
-        # Each rank gets batch_size / world_size examples
-        local_bs = batch_data.size(0) // world_size
-        offset = rank * local_bs
-        rows = batch_data[offset : offset + local_bs].to(device)
-
-        optimizer.zero_grad()
-        loss = model.forward(rows).mean()
-        loss.backward()
-
-        # All-reduce gradients across all ranks (averaging them)
-        for name, param in model.named_parameters():
-            if param.grad is not None:
-                dist.all_reduce(param.grad, dist.ReduceOp.AVG)
-
-        optimizer.step()
-
-    # Clean up process group
-    dist.destroy_process_group()
-
-    # Return the updated model (will be sent back to main process)
-    return model
-
-
-def native_ddp(model, optimizer, batch_data, d, backend="gloo", num_steps=1):
-    """
-    Perform naive distributed data parallel training.
-
-    Args:
-        model: The model to train
-        optimizer: The optimizer to use
-        batch_data: The full batch of data (will be sharded across ranks)
-        d: Number of processes (world_size)
-        backend: Backend to use ('gloo' for CPU, 'nccl' for GPU)
-        num_steps: Number of training steps to perform
-
-    Note: The original model is not modified. To get the trained model,
-    you need to save it from within the worker process or use the
-    verification function below.
-    """
-    mp.spawn(
-        fn=train_func_multiple_steps,
-        args=(d, batch_data, model, optimizer, backend, num_steps),
-        nprocs=d,
-        join=True
-    )
-
-
 def _ddp_verification_worker(rank, world_size, all_data, all_labels, in_features, out_features, num_steps, backend):
     """Worker function that performs DDP training and saves final model state."""
     from toy_model import ToyModel
@@ -210,9 +98,9 @@ def verify_ddp_correctness(world_size=2, batch_size=20, num_steps=5, backend="gl
     all_data = torch.randn(batch_size, in_features)
     all_labels = torch.randn(batch_size, out_features)
 
-    print("="*80)
+    print("=" * 80)
     print("VERIFICATION TEST: Single-process vs DDP Training")
-    print("="*80)
+    print("=" * 80)
 
     # ===== SINGLE-PROCESS BASELINE =====
     print("\n1. Running single-process baseline training...")
@@ -238,7 +126,7 @@ def verify_ddp_correctness(world_size=2, batch_size=20, num_steps=5, backend="gl
         _ddp_verification_worker,
         args=(world_size, all_data, all_labels, in_features, out_features, num_steps, backend),
         nprocs=world_size,
-        join=True
+        join=True,
     )
 
     # Load the DDP model state
@@ -252,8 +140,7 @@ def verify_ddp_correctness(world_size=2, batch_size=20, num_steps=5, backend="gl
     max_diff = 0.0
 
     for (name, single_param), (_, ddp_param) in zip(
-        single_process_model.named_parameters(),
-        ddp_model.named_parameters()
+        single_process_model.named_parameters(), ddp_model.named_parameters()
     ):
         if torch.allclose(single_param, ddp_param, rtol=1e-5, atol=1e-6):
             print(f"   ✓ {name}: MATCH")
@@ -263,12 +150,12 @@ def verify_ddp_correctness(world_size=2, batch_size=20, num_steps=5, backend="gl
             print(f"   ✗ {name}: MISMATCH (max diff: {diff:.2e})")
             all_close = False
 
-    print("\n" + "="*80)
+    print("\n" + "=" * 80)
     if all_close:
         print("SUCCESS: DDP training matches single-process training!")
     else:
         print(f"FAILURE: Maximum difference = {max_diff:.2e}")
-    print("="*80 + "\n")
+    print("=" * 80 + "\n")
 
     return all_close
 
@@ -278,9 +165,4 @@ if __name__ == "__main__":
     mp.set_start_method("spawn", force=True)
 
     # Run verification test
-    success = verify_ddp_correctness(
-        world_size=2,
-        batch_size=20,
-        num_steps=5,
-        backend="gloo"
-    )
+    success = verify_ddp_correctness(world_size=2, batch_size=20, num_steps=5, backend="gloo")
