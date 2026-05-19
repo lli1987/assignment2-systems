@@ -101,9 +101,24 @@ def benchmark_worker(
         for param in model.parameters():
             if param.grad is not None:
                 param_tensors.append(param.grad)
-        flat_param_tensor = torch._utils_._flatten_dense_tensors(param_tensors)
+
+        # Flatten all gradients into a single tensor for efficient all-reduce
+        # Note: In PyTorch 2.0+, the API moved from torch._utils_ to torch._C._nn
+        try:
+            # Try PyTorch 2.0+ location first
+            flat_param_tensor = torch._C._nn.flatten_dense_tensors(param_tensors)
+        except AttributeError:
+            # Fallback to older PyTorch versions
+            flat_param_tensor = torch._utils._flatten_dense_tensors(param_tensors)
+
         dist.all_reduce(flat_param_tensor, dist.ReduceOp.AVG)
-        unflattened = torch._utils_.unflatten_dense_tensors(flat_param_tensor, param_tensors)
+
+        # Unflatten back to original shapes
+        try:
+            unflattened = torch._C._nn.unflatten_dense_tensors(flat_param_tensor, param_tensors)
+        except AttributeError:
+            unflattened = torch._utils._unflatten_dense_tensors(flat_param_tensor, param_tensors)
+
         for orig, unflat in zip(param_tensors, unflattened):
             orig.copy_(unflat)
 
