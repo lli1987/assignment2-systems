@@ -74,11 +74,12 @@ def benchmark_worker(
     step_times = []
     allreduce_times = []
 
+    # Synthetic token data — no dataset dependency needed for benchmarking
+    x = torch.randint(0, vocab_size, (batch_size, context_length), device=device)
+    y = torch.randint(0, vocab_size, (batch_size, context_length), device=device)
+
     total_steps = warmup_steps + measure_steps
     for step in range(total_steps):
-        # Synthetic token data — no dataset dependency needed for benchmarking
-        x = torch.randint(0, vocab_size, (batch_size, context_length), device=device)
-        y = torch.randint(0, vocab_size, (batch_size, context_length), device=device)
 
         torch.cuda.synchronize()
         t_step_start = time.perf_counter()
