@@ -12,11 +12,11 @@ class ToyModel(nn.Module):
 
     def forward(self, x):
         x = self.relu(self.fc1(x))
-        print(f"fc1 type: {x.dtype}")
+        # print(f"fc1 type: {x.dtype}")
         x = self.ln(x)
-        print(f"ln type: {x.dtype}")
+        # print(f"ln type: {x.dtype}")
         x = self.fc2(x)
-        print(f"fc2 type: {x.dtype}")
+        # print(f"fc2 type: {x.dtype}")
         return x
 
 

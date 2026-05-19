@@ -22,3 +22,15 @@ uv run python cs336_systems/benchmark_flash_attention.py --max_seq_len 1024 --ma
 
 # Benchmark FlashAttention-2 - Custom range
 uv run python cs336_systems/benchmark_flash_attention.py --min_seq_len 1024 --max_seq_len 8192 --min_d_model 32 --max_d_model 128 --output_dir ./flash_benchmark_custom
+
+# Benchmark All-Reduce - Full (both Gloo and NCCL)
+uv run python cs336_systems/benchmark_allreduce.py --output_dir ./allreduce_results
+
+# Benchmark All-Reduce - NCCL only (GPU)
+uv run python cs336_systems/benchmark_allreduce.py --skip_gloo --output_dir ./allreduce_nccl
+
+# Benchmark All-Reduce - Gloo only (CPU)
+uv run python cs336_systems/benchmark_allreduce.py --skip_nccl --output_dir ./allreduce_gloo
+
+# Benchmark All-Reduce - High precision (more iterations)
+uv run python cs336_systems/benchmark_allreduce.py --warmup_iters 20 --benchmark_iters 200 --output_dir ./allreduce_highprecision
