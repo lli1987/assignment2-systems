@@ -14,7 +14,6 @@ Key features:
 
 import torch
 import torch.distributed as dist
-from typing import Optional, List
 
 
 class DDPIndividualParameters(torch.nn.Module):
@@ -75,9 +74,8 @@ class DDPIndividualParameters(torch.nn.Module):
         allowing us to launch the all-reduce operation immediately (overlapping
         communication with backward computation).
         """
-        self.handles = []
         for param in self.module.parameters():
-            if param.grad:
+            if param.requires_grad:
                 param.register_post_accumulate_grad_hook(self._make_hook(param))
 
     def _make_hook(self, param: torch.nn.Parameter):
@@ -98,7 +96,7 @@ class DDPIndividualParameters(torch.nn.Module):
             selective sync) and to maintain a clear factory pattern.
         """
 
-        def hook(param: torch.nn.Parameter):
+        def hook(param: torch.Tensor):
             handle = dist.all_reduce(tensor=param.grad, op=dist.ReduceOp.AVG, async_op=True)
             self.handles.append(handle)
 
@@ -119,6 +117,7 @@ class DDPIndividualParameters(torch.nn.Module):
         """
         for handle in self.handles:
             handle.wait()
+        self.handles.clear()
 
     def forward(self, *inputs, **kwargs):
         """
