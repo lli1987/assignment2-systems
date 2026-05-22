@@ -20,6 +20,8 @@ import torch
 import torch.distributed as dist
 import torch.multiprocessing as mp
 import torch.nn.functional as F
+from torch.utils.data import TensorDataset, DataLoader
+from torch.utils.data.distributed import DistributedSampler
 
 from cs336_basics.model import BasicsTransformerLM
 from cs336_basics.optimizer import AdamW
@@ -73,6 +75,8 @@ def benchmark_worker(
     warmup_steps,
     measure_steps,
     use_amp,
+    shared_data_x,
+    shared_data_y,
 ):
     setup(rank, world_size)
     device = torch.device(f"cuda:{rank}")
@@ -99,12 +103,24 @@ def benchmark_worker(
         else nullcontext()
     )
 
+    # Create dataset and distributed sampler
+    dataset = TensorDataset(shared_data_x, shared_data_y)
+    sampler = DistributedSampler(
+        dataset,
+        num_replicas=world_size,
+        rank=rank,
+        shuffle=False,
+    )
+    dataloader = DataLoader(
+        dataset,
+        batch_size=batch_size,
+        sampler=sampler,
+        num_workers=0,
+        pin_memory=True,
+    )
+
     step_times = []
     allreduce_times = []
-
-    # Pre-allocate synthetic data to avoid repeated memory allocations
-    x = torch.randint(0, vocab_size, (batch_size, context_length), device=device)
-    y = torch.randint(0, vocab_size, (batch_size, context_length), device=device)
 
     if rank == 0:
         # Report actual memory usage after model creation
@@ -113,7 +129,13 @@ def benchmark_worker(
         print(f"Initial GPU memory: allocated={allocated:.2f}GB, reserved={reserved:.2f}GB")
 
     total_steps = warmup_steps + measure_steps
-    for step in range(total_steps):
+    for step, (x, y) in enumerate(dataloader):
+        if step >= total_steps:
+            break
+
+        # Move data to device
+        x = x.to(device)
+        y = y.to(device)
 
         torch.cuda.synchronize()
         t_step_start = time.perf_counter()
@@ -233,6 +255,19 @@ def main():
         print("  --model_size small/medium (smaller model)")
         print("=" * 70)
 
+    # Generate shared synthetic dataset
+    total_steps = args.warmup_steps + args.measure_steps
+    total_samples = total_steps * args.batch_size * args.world_size
+
+    print(f"\nGenerating synthetic dataset: {total_samples} samples...")
+    shared_data_x = torch.randint(
+        0, args.vocab_size, (total_samples, args.context_length)
+    ).share_memory_()
+    shared_data_y = torch.randint(
+        0, args.vocab_size, (total_samples, args.context_length)
+    ).share_memory_()
+    print(f"Dataset generated. Each rank will process {total_samples // args.world_size} samples.\n")
+
     mp.spawn(
         benchmark_worker,
         args=(
@@ -244,6 +279,8 @@ def main():
             args.warmup_steps,
             args.measure_steps,
             args.use_amp,
+            shared_data_x,
+            shared_data_y,
         ),
         nprocs=args.world_size,
         join=True,

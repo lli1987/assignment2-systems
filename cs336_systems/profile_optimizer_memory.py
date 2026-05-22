@@ -19,6 +19,8 @@ import torch.multiprocessing as mp
 import torch.nn.functional as F
 from contextlib import nullcontext
 from typing import Optional
+from torch.utils.data import TensorDataset, DataLoader
+from torch.utils.data.distributed import DistributedSampler
 
 from cs336_basics.model import BasicsTransformerLM
 from cs336_basics.optimizer import AdamW
@@ -131,6 +133,8 @@ def profile_worker(
     context_length: int,
     batch_size: int,
     use_amp: bool,
+    shared_data_x,
+    shared_data_y,
 ):
     """Worker function to profile memory usage."""
     setup_process_group(rank, world_size)
@@ -192,9 +196,27 @@ def profile_worker(
             weight_decay=0.01,
         )
 
-    # Generate synthetic data
-    x = torch.randint(0, vocab_size, (batch_size, context_length), device=device)
-    y = torch.randint(0, vocab_size, (batch_size, context_length), device=device)
+    # Create dataset and distributed sampler
+    dataset = TensorDataset(shared_data_x, shared_data_y)
+    sampler = DistributedSampler(
+        dataset,
+        num_replicas=world_size,
+        rank=rank,
+        shuffle=False,
+    )
+    dataloader = DataLoader(
+        dataset,
+        batch_size=batch_size,
+        sampler=sampler,
+        num_workers=0,
+        pin_memory=True,
+    )
+
+    # Get first batch
+    data_iter = iter(dataloader)
+    x, y = next(data_iter)
+    x = x.to(device)
+    y = y.to(device)
 
     ctx = (
         torch.amp.autocast(device_type="cuda", dtype=torch.bfloat16)
@@ -316,6 +338,16 @@ def main():
     )
     args = parser.parse_args()
 
+    # Generate shared synthetic dataset (just one batch for memory profiling)
+    print(f"\nGenerating synthetic dataset: {args.batch_size * args.world_size} samples...")
+    shared_data_x = torch.randint(
+        0, args.vocab_size, (args.batch_size * args.world_size, args.context_length)
+    ).share_memory_()
+    shared_data_y = torch.randint(
+        0, args.vocab_size, (args.batch_size * args.world_size, args.context_length)
+    ).share_memory_()
+    print(f"Dataset generated. Each rank will process {args.batch_size} samples.\n")
+
     # Profile non-sharded optimizer
     print("\n" + "="*80)
     print("RUNNING PROFILE: NON-SHARDED OPTIMIZER")
@@ -330,6 +362,8 @@ def main():
             args.context_length,
             args.batch_size,
             args.use_amp,
+            shared_data_x,
+            shared_data_y,
         ),
         nprocs=args.world_size,
         join=True,
@@ -349,6 +383,8 @@ def main():
             args.context_length,
             args.batch_size,
             args.use_amp,
+            shared_data_x,
+            shared_data_y,
         ),
         nprocs=args.world_size,
         join=True,

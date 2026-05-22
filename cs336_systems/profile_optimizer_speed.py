@@ -22,6 +22,8 @@ import torch.distributed as dist
 import torch.multiprocessing as mp
 import torch.nn.functional as F
 from contextlib import nullcontext
+from torch.utils.data import TensorDataset, DataLoader
+from torch.utils.data.distributed import DistributedSampler
 
 from cs336_basics.model import BasicsTransformerLM
 from cs336_basics.optimizer import AdamW
@@ -95,6 +97,8 @@ def profile_speed_worker(
     warmup_steps: int,
     measure_steps: int,
     use_amp: bool,
+    shared_data_x,
+    shared_data_y,
 ):
     """Worker function to profile training speed."""
     setup_process_group(rank, world_size)
@@ -141,9 +145,28 @@ def profile_speed_worker(
             weight_decay=0.01,
         )
 
-    # Pre-allocate data
-    x = torch.randint(0, vocab_size, (batch_size, context_length), device=device)
-    y = torch.randint(0, vocab_size, (batch_size, context_length), device=device)
+    # Create dataset and distributed sampler
+    total_steps = warmup_steps + measure_steps
+
+    # Create dataset from shared data
+    dataset = TensorDataset(shared_data_x, shared_data_y)
+
+    # Use DistributedSampler to shard data across ranks
+    sampler = DistributedSampler(
+        dataset,
+        num_replicas=world_size,
+        rank=rank,
+        shuffle=False,
+    )
+
+    # DataLoader with distributed sampler
+    dataloader = DataLoader(
+        dataset,
+        batch_size=batch_size,
+        sampler=sampler,
+        num_workers=0,
+        pin_memory=True,
+    )
 
     ctx = (
         torch.amp.autocast(device_type="cuda", dtype=torch.bfloat16)
@@ -158,9 +181,15 @@ def profile_speed_worker(
     total_times = []
     losses = []
 
-    total_steps = warmup_steps + measure_steps
+    # Iterate through batches from the dataloader
+    for step, (x, y) in enumerate(dataloader):
+        if step >= total_steps:
+            break
 
-    for step in range(total_steps):
+        # Move data to device
+        x = x.to(device)
+        y = y.to(device)
+
         # Start iteration timer
         torch.cuda.synchronize()
         t_iter_start = time.perf_counter()
@@ -301,6 +330,20 @@ def main():
     )
     args = parser.parse_args()
 
+    # Generate shared synthetic dataset (total global batch)
+    # Total samples needed: (warmup + measure) steps * batch_size * world_size
+    total_steps = args.warmup_steps + args.measure_steps
+    total_samples = total_steps * args.batch_size * args.world_size
+
+    print(f"\nGenerating synthetic dataset: {total_samples} samples...")
+    shared_data_x = torch.randint(
+        0, args.vocab_size, (total_samples, args.context_length)
+    ).share_memory_()
+    shared_data_y = torch.randint(
+        0, args.vocab_size, (total_samples, args.context_length)
+    ).share_memory_()
+    print(f"Dataset generated. Each rank will process {total_samples // args.world_size} samples.\n")
+
     # Profile non-sharded optimizer
     print("\n" + "="*80)
     print("RUNNING PROFILE: NON-SHARDED OPTIMIZER")
@@ -317,6 +360,8 @@ def main():
             args.warmup_steps,
             args.measure_steps,
             args.use_amp,
+            shared_data_x,
+            shared_data_y,
         ),
         nprocs=args.world_size,
         join=True,
@@ -338,6 +383,8 @@ def main():
             args.warmup_steps,
             args.measure_steps,
             args.use_amp,
+            shared_data_x,
+            shared_data_y,
         ),
         nprocs=args.world_size,
         join=True,
