@@ -17,51 +17,26 @@ import torch.distributed as dist
 
 
 class FSDP(torch.nn.Module):
-    """
-    DDP wrapper that communicates gradients individually per parameter.
-
-    This is the "naive" overlapping approach that launches one all-reduce
-    operation per parameter as soon as its gradient is ready during the
-    backward pass.
-
-    Usage:
-        model = MyModel()
-        ddp_model = DDPIndividualParameters(model)
-
-        # Training loop
-        optimizer.zero_grad()
-        loss = ddp_model(inputs)
-        loss.backward()  # Hooks fire async all-reduce for each param
-        ddp_model.finish_gradient_synchronization()  # Wait for all to complete
-        optimizer.step()
-
-    Attributes:
-        module: The wrapped model
-        process_group: The process group for distributed communication
-        _async_handles: List of async operation handles to wait on
-    """
 
     def __init__(self, module: torch.nn.Module, compute_dtype: torch.dtype | None = None):
-        """
-        Initialize the DDP wrapper.
-
-        Args:
-            module: The model to wrap
-        """
         super().__init__()
         self.module = module
         self.handles = []
-        self._broadcast_parameters()
+        self._register_pre_forward_hooks()
         self._register_backward_hooks()
 
-    def _broadcast_parameters(self):
-        """
-        Broadcast all parameters from rank 0 to all other ranks.
+    def _register_pre_forward_hooks(self):
+        for module in self.module.modules:
+            module.register_forward_pre_hook(self._make_pre_forward_hook())
 
-        This is called during initialization to synchronize the initial model state.
-        """
-        for param in self.module.parameters():
-            dist.broadcast(tensor=param.data, src=0)
+    def _make_pre_forward_hook(self):
+        def hook(module: torch.nn.Module):
+            for param in module.parameters(recurse=False):
+                gathered_param = []
+                dist.all_gather(gathered_param, param)
+                param.data = torch.concat(gathered_param, dim=0)
+
+        return hook
 
     def _register_backward_hooks(self):
         """
@@ -73,28 +48,13 @@ class FSDP(torch.nn.Module):
         """
         for param in self.module.parameters():
             if param.requires_grad:
-                param.register_post_accumulate_grad_hook(self._make_hook(param))
+                param.register_post_accumulate_grad_hook(self._make_backward_hook())
 
-    def _make_hook(self, param: torch.nn.Parameter):
-        """
-        Create a backward hook for a specific parameter.
-
-        The hook launches an async all-reduce operation when the parameter's
-        gradient becomes available.
-
-        Args:
-            param: The parameter to create a hook for (used for closure context)
-
-        Returns:
-            A hook function that will be called with the gradient tensor
-
-        Note:
-            The param argument is kept for potential future use (e.g., debugging,
-            selective sync) and to maintain a clear factory pattern.
-        """
-
+    def _make_backward_hook(self):
         def hook(param: torch.Tensor):
-            handle = dist.all_reduce(tensor=param.grad, op=dist.ReduceOp.AVG, async_op=True)
+            gathered_param = param.grad
+            full_param_list = gathered_param.chunk(dist.get_world_size())
+            handle = dist.reduce_scatter(param.grad, full_param_list, dist.ReduceOp.AVG, async_op=True)
             self.handles.append(handle)
 
         return hook
