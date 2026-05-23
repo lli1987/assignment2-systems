@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import torch
 
+
 def get_flashattention_autograd_function_pytorch() -> type:
     """
     Returns a torch.autograd.Function subclass that implements FlashAttention2.
@@ -52,14 +53,9 @@ def get_ddp(module: torch.nn.Module) -> torch.nn.Module:
     Returns:
         Instance of a DDP class.
     """
-<<<<<<< HEAD
     from cs336_systems.ddp_overlap_individual_parameters import DDPIndividualParameters
 
     return DDPIndividualParameters(module)
-=======
-    # For example: return DDP(module)
-    raise NotImplementedError
->>>>>>> upstream/main
 
 
 def ddp_on_after_backward(ddp_model: torch.nn.Module, optimizer: torch.optim.Optimizer):
