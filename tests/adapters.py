@@ -88,8 +88,9 @@ def get_fsdp(module: torch.nn.Module, compute_dtype: torch.dtype | None = None) 
     Returns:
         Instance of an FSDP class.
     """
-    # For example: return FSDP(module, compute_dtype=compute_dtype)
-    raise NotImplementedError
+    from cs336_systems.fsdp_module import FSDP
+
+    return FSDP(module, compute_dtype=compute_dtype)
 
 
 def fsdp_on_after_backward(fsdp_model: torch.nn.Module, optimizer: torch.optim.Optimizer):
@@ -104,7 +105,8 @@ def fsdp_on_after_backward(fsdp_model: torch.nn.Module, optimizer: torch.optim.O
             Optimizer being used with the FSDP-wrapped model.
     """
     # For example: fsdp_model.finish_gradient_synchronization()
-    raise NotImplementedError
+
+    fsdp_model.finish_gradient_synchronization()
 
 
 def fsdp_gather_full_params(fsdp_model: torch.nn.Module) -> dict[str, torch.Tensor]:
@@ -118,7 +120,25 @@ def fsdp_gather_full_params(fsdp_model: torch.nn.Module) -> dict[str, torch.Tens
     Returns:
         State dictionary mapping parameter names to full (unsharded) tensors.
     """
-    raise NotImplementedError
+    import torch.distributed as dist
+
+    gather_full_params = dict()
+
+    for name, param in fsdp_model.module.named_parameters():
+        # Check if this parameter is sharded (will be in fsdp_model.param_metadata)
+        if id(param) in fsdp_model.param_metadata:
+            # Sharded parameter: all-gather to reconstruct full parameter
+            flatten = param.data
+            gathered_param = [torch.empty_like(flatten) for _ in range(dist.get_world_size())]
+            dist.all_gather(gathered_param, flatten)
+            full_flat = torch.concat(gathered_param, dim=0)
+            # Reshape to original shape
+            gather_full_params[name] = full_flat.view(fsdp_model.param_metadata[id(param)])
+        else:
+            # Replicated parameter: already has full data
+            gather_full_params[name] = param.data
+
+    return gather_full_params
 
 
 def get_sharded_optimizer(params, optimizer_cls: type[torch.optim.Optimizer], **kwargs) -> torch.optim.Optimizer:
