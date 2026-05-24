@@ -84,10 +84,6 @@ class FSDP(torch.nn.Module):
     def _make_forward_hook(self):
         def hook(module: torch.nn.Module, input, output):
             for param in module.parameters(recurse=False):
-                # Cast back to FP32 if we used compute_dtype
-                if self.compute_dtype is not None:
-                    param.data = param.data.to(torch.float32)
-
                 flatten = param.data.view(-1)
                 shard_size = flatten.size(dim=0) // self.world_size
                 param.data = flatten[self.rank * shard_size : (self.rank + 1) * shard_size]
@@ -98,29 +94,31 @@ class FSDP(torch.nn.Module):
         def hook(module, grad_output):
             for param in module.parameters(recurse=False):
                 flatten = param.data
+
+                # All-gather in compute_dtype (FP16 if specified)
                 gathered_param = [torch.empty_like(flatten) for _ in range(dist.get_world_size())]
                 dist.all_gather(gathered_param, flatten)
                 full_flat = torch.concat(gathered_param, dim=0)
                 param.data = full_flat.view(self.param_metadata[id(param)])
-
-                # Cast to compute_dtype for backward pass if specified
-                if self.compute_dtype is not None:
-                    param.data = param.data.to(self.compute_dtype)
+                # param.data is now in compute_dtype for backward computation
 
         return hook
 
     def _make_forward_pre_hook(self):
         def hook(module: torch.nn.Module, input):
             for param in module.parameters(recurse=False):
-                flatten = param.data
+                flatten = param.data  # FP32 shard
+
+                # Cast to compute_dtype BEFORE all-gather (saves bandwidth!)
+                if self.compute_dtype is not None:
+                    flatten = flatten.to(self.compute_dtype)
+
+                # All-gather in compute_dtype (FP16 if specified)
                 gathered_param = [torch.empty_like(flatten) for _ in range(dist.get_world_size())]
                 dist.all_gather(gathered_param, flatten)
                 full_flat = torch.concat(gathered_param, dim=0)
                 param.data = full_flat.view(self.param_metadata[id(param)])
-
-                # Cast to compute_dtype for forward pass if specified
-                if self.compute_dtype is not None:
-                    param.data = param.data.to(self.compute_dtype)
+                # param.data is now in compute_dtype for forward computation
 
         return hook
 
