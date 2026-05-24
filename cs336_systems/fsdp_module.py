@@ -144,7 +144,7 @@ class FSDP(torch.nn.Module):
             dist.reduce_scatter(grad_shard, full_param_list, dist.ReduceOp.AVG)
 
             # Re-shard param.data
-            flatten_weights = param.data.view(-1)
+            flatten_weights = p.data.view(-1)
             param_shard = flatten_weights[self.rank * shard_size : (self.rank + 1) * shard_size].clone()
             p.data = param_shard
 
