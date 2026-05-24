@@ -33,6 +33,7 @@ class FSDP(torch.nn.Module):
         self.rank = dist.get_rank()
         self.world_size = dist.get_world_size()
         self.param_metadata = dict()
+        self.saved_fp32_shards = dict()  # Save FP32 shards to avoid re-casting errors
         self._broadcast_params()  # Ensure all ranks start with same params
         self._shard_params()
         self._register_forward_pre_hooks()
@@ -84,27 +85,44 @@ class FSDP(torch.nn.Module):
     def _make_forward_hook(self):
         def hook(module: torch.nn.Module, input, output):
             for param in module.parameters(recurse=False):
-                flatten = param.data.view(-1)
-                shard_size = flatten.size(dim=0) // self.world_size
-                param.data = flatten[self.rank * shard_size : (self.rank + 1) * shard_size]
+                # Restore the saved FP32 shard instead of casting (avoids precision loss)
+                if self.compute_dtype is not None and id(param) in self.saved_fp32_shards:
+                    param.data = self.saved_fp32_shards[id(param)]
+                    del self.saved_fp32_shards[id(param)]
+                else:
+                    # No mixed precision, just re-shard
+                    flatten = param.data.view(-1)
+                    shard_size = flatten.size(dim=0) // self.world_size
+                    param.data = flatten[self.rank * shard_size : (self.rank + 1) * shard_size]
 
         return hook
 
     def _make_backward_pre_hook(self):
         def hook(module, grad_output):
             for param in module.parameters(recurse=False):
-                flatten = param.data
+
+                flatten = param.data  # FP32 shard
+
+                # Cast to compute_dtype BEFORE all-gather (saves bandwidth!)
+                if self.compute_dtype is not None:
+                    self.saved_fp32_shards[id(param)] = param.data.clone()
+                    flatten = flatten.to(self.compute_dtype)
 
                 gathered_param = [torch.empty_like(flatten) for _ in range(dist.get_world_size())]
                 dist.all_gather(gathered_param, flatten)
                 full_flat = torch.concat(gathered_param, dim=0)
                 param.data = full_flat.view(self.param_metadata[id(param)])
+                # param.data is now in compute_dtype for backward computation
 
         return hook
 
     def _make_forward_pre_hook(self):
         def hook(module: torch.nn.Module, input):
             for param in module.parameters(recurse=False):
+                # Save the FP32 shard to restore later (avoids re-casting errors)
+                if self.compute_dtype is not None:
+                    self.saved_fp32_shards[id(param)] = param.data.clone()
+
                 flatten = param.data  # FP32 shard
 
                 # Cast to compute_dtype BEFORE all-gather (saves bandwidth!)
@@ -126,27 +144,30 @@ class FSDP(torch.nn.Module):
             if p.grad is None:
                 return None
 
-            # Reduce-scatter gradient first (while grad still has full shape)
-            flatten = p.grad.view(-1)
+            # Cast gradient to FP32 if we used compute_dtype (before reduce-scatter)
+            grad = p.grad
+            if self.compute_dtype is not None:
+                grad = grad.to(torch.float32)
+
+            # Reduce-scatter gradient (in FP32)
+            flatten = grad.view(-1)
             shard_size = flatten.size(dim=0) // self.world_size
             full_param_list = list(torch.chunk(flatten, self.world_size))
-            grad_shard = torch.empty(shard_size, dtype=p.grad.dtype, device=p.grad.device)
+            grad_shard = torch.empty(shard_size, dtype=grad.dtype, device=grad.device)
             dist.reduce_scatter(grad_shard, full_param_list, dist.ReduceOp.AVG)
 
-            # Re-shard param.data
-            flatten_weights = p.data.view(-1)
-            param_shard = flatten_weights[self.rank * shard_size : (self.rank + 1) * shard_size].clone()
-            p.data = param_shard
+            # Restore the saved FP32 shard instead of casting (avoids precision loss)
+            if self.compute_dtype is not None and id(p) in self.saved_fp32_shards:
+                p.data = self.saved_fp32_shards[id(p)]
+                del self.saved_fp32_shards[id(p)]
+            else:
+                # No mixed precision, just re-shard
+                flatten_weights = p.data.view(-1)
+                param_shard = flatten_weights[self.rank * shard_size : (self.rank + 1) * shard_size].clone()
+                p.data = param_shard
 
-            # Modify param.grad in place to be the sharded gradient
+            # Modify param.grad in place to be the sharded gradient (already FP32)
             p.grad = grad_shard
-
-            # Restore param.data to FP32 before re-sharding
-            if self.compute_dtype is not None:
-                p.data = p.data.to(torch.float32)
-            # Cast gradient to FP32 if we used compute_dtype
-            if self.compute_dtype is not None:
-                p.grad = p.grad.to(torch.float32)
 
             # Must return None for post_accumulate_grad_hook
             return None
