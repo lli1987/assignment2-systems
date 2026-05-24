@@ -14,7 +14,13 @@ Key features:
 
 import torch
 import torch.distributed as dist
-from torch.nn.modules import Linear, Embedding
+
+# Import from cs336_basics where the actual modules are defined
+try:
+    from cs336_basics.model import Linear, Embedding
+except ImportError:
+    # Fallback to torch.nn if cs336_basics not available
+    from torch.nn.modules import Linear, Embedding
 
 
 class FSDP(torch.nn.Module):
@@ -65,13 +71,15 @@ class FSDP(torch.nn.Module):
                 module.register_forward_hook(self._make_forward_hook())
 
     def _register_backward_hooks(self):
+        # Register parameter-level hooks instead of module-level hooks
         for module in self.module.modules():
-            if isinstance(module, (Linear, Embedding)):
-                # Sharded params: reduce-scatter
-                module.register_full_backward_hook(self._make_backward_hook())
-            elif list(module.parameters(recurse=False)):
-                # Replicated params: all-reduce
-                module.register_full_backward_hook(self._make_replicated_backward_hook())
+            for param in module.parameters(recurse=False):
+                if isinstance(module, (Linear, Embedding)):
+                    # Sharded params: reduce-scatter
+                    param.register_post_accumulate_grad_hook(self._make_param_backward_hook(param))
+                else:
+                    # Replicated params: all-reduce
+                    param.register_post_accumulate_grad_hook(self._make_replicated_param_backward_hook(param))
 
     def _make_forward_hook(self):
         def hook(module: torch.nn.Module, input, output):
@@ -116,38 +124,48 @@ class FSDP(torch.nn.Module):
 
         return hook
 
-    def _make_backward_hook(self):
-        def hook(module: torch.nn.Module, grad_in, grad_out):
-            for param in module.parameters(recurse=False):
-                if param.grad is None:
-                    continue
+    def _make_param_backward_hook(self, param):
+        """Create backward hook for sharded parameters (Linear/Embedding)."""
 
-                # Cast gradient to FP32 if we used compute_dtype
-                if self.compute_dtype is not None:
-                    param.grad = param.grad.to(torch.float32)
+        def hook(p: torch.Tensor):
+            if p.grad is None:
+                return None
 
-                # Restore param.data to FP32 before re-sharding
-                if self.compute_dtype is not None:
-                    param.data = param.data.to(torch.float32)
+            # Restore param.data to FP32 before re-sharding
+            if self.compute_dtype is not None:
+                p.data = p.data.to(torch.float32)
+            # Cast gradient to FP32 if we used compute_dtype
+            if self.compute_dtype is not None:
+                p.grad = p.grad.to(torch.float32)
 
-                flatten_weights = param.data.view(-1)
-                shard_size = flatten_weights.size(dim=0) // self.world_size
-                param.data = flatten_weights[self.rank * shard_size : (self.rank + 1) * shard_size]
+            # Reduce-scatter gradient first (while grad still has full shape)
+            flatten = p.grad.view(-1)
+            shard_size = flatten.size(dim=0) // self.world_size
+            full_param_list = list(torch.chunk(flatten, self.world_size))
+            grad_shard = torch.empty(shard_size, dtype=p.grad.dtype, device=p.grad.device)
+            dist.reduce_scatter(grad_shard, full_param_list, dist.ReduceOp.AVG)
 
-                flatten = param.grad.view(-1)
-                full_param_list = list(torch.chunk(flatten, self.world_size))
-                grad_shard = torch.empty(shard_size, dtype=param.grad.dtype, device=param.grad.device)
-                dist.reduce_scatter(grad_shard, full_param_list, dist.ReduceOp.AVG)
-                param.grad = grad_shard
+            # Re-shard param.data
+            flatten_weights = param.data.view(-1)
+            param_shard = flatten_weights[self.rank * shard_size : (self.rank + 1) * shard_size].clone()
+            p.data = param_shard
+
+            # Modify param.grad in place to be the sharded gradient
+            p.grad = grad_shard
+
+            # Must return None for post_accumulate_grad_hook
+            return None
 
         return hook
 
-    def _make_replicated_backward_hook(self):
-        """All-reduce gradients for replicated (non-sharded) parameters."""
-        def hook(module: torch.nn.Module, grad_in, grad_out):
-            for param in module.parameters(recurse=False):
-                if param.grad is not None:
-                    dist.all_reduce(param.grad, op=dist.ReduceOp.AVG)
+    def _make_replicated_param_backward_hook(self, param):
+        """Create backward hook for replicated parameters (RMSNorm, etc)."""
+
+        def hook(p: torch.Tensor):
+            if p.grad is not None:
+                dist.all_reduce(p.grad, op=dist.ReduceOp.AVG)
+            # Must return None for post_accumulate_grad_hook
+            return None
 
         return hook
 
