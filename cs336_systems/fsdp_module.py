@@ -76,10 +76,10 @@ class FSDP(torch.nn.Module):
             for param in module.parameters(recurse=False):
                 if isinstance(module, (Linear, Embedding)):
                     # Sharded params: reduce-scatter
-                    param.register_post_accumulate_grad_hook(self._make_param_backward_hook(param))
+                    param.register_post_accumulate_grad_hook(self._make_param_backward_hook())
                 else:
                     # Replicated params: all-reduce
-                    param.register_post_accumulate_grad_hook(self._make_replicated_param_backward_hook(param))
+                    param.register_post_accumulate_grad_hook(self._make_replicated_param_backward_hook())
 
     def _make_forward_hook(self):
         def hook(module: torch.nn.Module, input, output):
@@ -95,12 +95,10 @@ class FSDP(torch.nn.Module):
             for param in module.parameters(recurse=False):
                 flatten = param.data
 
-                # All-gather in compute_dtype (FP16 if specified)
                 gathered_param = [torch.empty_like(flatten) for _ in range(dist.get_world_size())]
                 dist.all_gather(gathered_param, flatten)
                 full_flat = torch.concat(gathered_param, dim=0)
                 param.data = full_flat.view(self.param_metadata[id(param)])
-                # param.data is now in compute_dtype for backward computation
 
         return hook
 
@@ -118,23 +116,15 @@ class FSDP(torch.nn.Module):
                 dist.all_gather(gathered_param, flatten)
                 full_flat = torch.concat(gathered_param, dim=0)
                 param.data = full_flat.view(self.param_metadata[id(param)])
-                # param.data is now in compute_dtype for forward computation
 
         return hook
 
-    def _make_param_backward_hook(self, param):
+    def _make_param_backward_hook(self):
         """Create backward hook for sharded parameters (Linear/Embedding)."""
 
         def hook(p: torch.Tensor):
             if p.grad is None:
                 return None
-
-            # Restore param.data to FP32 before re-sharding
-            if self.compute_dtype is not None:
-                p.data = p.data.to(torch.float32)
-            # Cast gradient to FP32 if we used compute_dtype
-            if self.compute_dtype is not None:
-                p.grad = p.grad.to(torch.float32)
 
             # Reduce-scatter gradient first (while grad still has full shape)
             flatten = p.grad.view(-1)
@@ -151,12 +141,19 @@ class FSDP(torch.nn.Module):
             # Modify param.grad in place to be the sharded gradient
             p.grad = grad_shard
 
+            # Restore param.data to FP32 before re-sharding
+            if self.compute_dtype is not None:
+                p.data = p.data.to(torch.float32)
+            # Cast gradient to FP32 if we used compute_dtype
+            if self.compute_dtype is not None:
+                p.grad = p.grad.to(torch.float32)
+
             # Must return None for post_accumulate_grad_hook
             return None
 
         return hook
 
-    def _make_replicated_param_backward_hook(self, param):
+    def _make_replicated_param_backward_hook(self):
         """Create backward hook for replicated parameters (RMSNorm, etc)."""
 
         def hook(p: torch.Tensor):
